@@ -28,7 +28,7 @@ services:
     networks:
       - lakehouse-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U iceberg"]
+      test: ["CMD-SHELL", "pg_isready -U iceberg -d iceberg_catalog"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -116,6 +116,7 @@ services:
       - "7077:7077"
       - "8080:8080"
     volumes:
+      - ./spark/spark-master/scripts/entrypoint.sh:/entrypoint.sh
       - spark-events:/tmp/spark-events
     networks:
       - lakehouse-net
@@ -135,6 +136,7 @@ services:
     ports:
       - "8081:8081"
     volumes:
+      - ./spark/spark-worker/scripts/entrypoint.sh:/entrypoint.sh
       - spark-events:/tmp/spark-events
     networks:
       - lakehouse-net
@@ -154,6 +156,7 @@ services:
     ports:
       - "8082:8081"
     volumes:
+      - ./spark/spark-worker/scripts/entrypoint.sh:/entrypoint.sh
       - spark-events:/tmp/spark-events
     networks:
       - lakehouse-net
@@ -175,6 +178,7 @@ services:
       - "10000:10000"
       - "4040:4040"
     volumes:
+      - ./spark/spark-thrift/scripts/entrypoint.sh:/entrypoint.sh
       - spark-events:/tmp/spark-events
     networks:
       - lakehouse-net
