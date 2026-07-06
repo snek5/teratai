@@ -14,4 +14,8 @@ RUN pip install uv
 
 RUN uv init 
 
-RUN uv install astronomer-cosmos dbt-spark[PyHive]
+RUN uv add astronomer-cosmos dbt-spark[PyHive]
+
+RUN mkdir dags dbt
+
+EXPOSE 8080
