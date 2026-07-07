@@ -1,0 +1,5 @@
+name: 'teratai'
+version: '1.0'
+profile: 'lakehouse'
+model-paths: ["models"]
+macros-paths: ["macros"]
