@@ -22,7 +22,7 @@ RUN uv add astronomer-cosmos dbt-spark[PyHive]
 
 RUN mkdir dags dbt
 
-COPY ./models ./dbt//teratai/models
+COPY ./models ./dbt/teratai/models
 
 COPY ./macros ./dbt/teratai/macros
 
