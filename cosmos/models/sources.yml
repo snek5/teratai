@@ -38,7 +38,7 @@ sources:
             nullValue: ''
 
       - name: cards
-        description: "CSV files containing branch data"
+        description: "CSV files containing card data"
         external:
           location: s3://warehouse/cards/
           file_format: csv
@@ -68,3 +68,14 @@ sources:
             header: true
             delimiter: ','
             nullValue: ''
+      
+      - name: transactions
+        description: "CSV files containing transaction data"
+        external:
+          location: s3://warehouse/transactions/
+          file_format: csv
+          options:
+            header: true
+            delimiter: ','
+            nullValue: ''
+            dateFormat: 'yyyy-MM-dd'

@@ -110,3 +110,18 @@ docker compose down
 - `8082` → Spark Worker 2 UI
 - `10000` → Spark Thrift Server
 - `4040` → Spark application UI
+
+---
+
+awal awal macam biasa, docker compose up pastu testing dulu pakai ani
+```bash
+docker run -d \
+  --name cosmos \
+  --restart unless-stopped \
+  -v dev-storage:/workspace \
+  -p 123:8080 \
+  python:13.3 \
+  sleep infinity
+```
+
+pastu copy paste benda benda `profiles.yml` and `sources .yml`. jangan lupa jua to connect the container to the docker compose punya network 
