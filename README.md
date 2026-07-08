@@ -1,17 +1,59 @@
 # Teratai Lakehouse Local Stack
 
-This repository contains a local lakehouse environment powered by Spark, Iceberg REST catalog, MinIO, and PostgreSQL.
+This repository provides a local lakehouse environment for experimenting with Apache Spark, Apache Iceberg, MinIO, PostgreSQL, and dbt. The stack is designed to run with Docker Compose and is suitable for local analytics pipelines, SQL testing, and transformation workflows.
 
-## Overview
+## What is included
 
-The stack is designed to run locally with Docker Compose. It provides:
+The core platform consists of:
 
-- a PostgreSQL-based Iceberg metadata catalog
-- MinIO object storage as an S3-compatible warehouse
-- Iceberg REST catalog service for Spark metadata access
-- Spark master and workers for execution
-- Spark Thrift Server for SQL/JDBC access
+- PostgreSQL as the Iceberg metadata catalog
+- MinIO as an S3-compatible warehouse for table data
+- An Iceberg REST catalog service for Spark metadata access
+- Spark master and worker nodes for distributed execution
+- A Spark Thrift Server for SQL and JDBC-style access
+- A dbt project under the cosmos folder with staging, intermediate, mart, and analytics models
+- An example Airflow/Cosmos DAG definition for orchestration
 
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Raw / Source Data] --> B[Airflow + Cosmos]
+    B --> C[dbt Project]
+    C --> D[Spark Thrift Server]
+    D --> E[Iceberg REST Catalog]
+    E --> F[PostgreSQL Metadata Catalog]
+    D --> G[MinIO / S3 Warehouse]
+    G --> H[Analytics Consumers]
+```
+```mermaid
+architecture-beta
+    group server_group(server)[Python Container]
+    group spark_group(server)[Spark Cluster]
+    
+    junction junctionRight
+
+    service storage(disk)[S3 Storage]
+    service laut(cloud)[Analytics]
+    service db(database)[Source Database]
+    service db2(database)[Metadata Catalog]
+    service orchestrator(server)[Airflow] in server_group
+    service transformation(server)[dbt] in server_group
+
+    service engine(server)[Master] in spark_group
+    service worker(server)[Worker] in spark_group
+    service thrift(server)[Thrift] in spark_group
+
+    db:R --> L:orchestrator
+    orchestrator:B --> T:transformation
+    transformation:R --> L:thrift
+    thrift:R --> L:junctionRight
+    thrift:T --> B:engine
+    engine:T --> B:worker
+    junctionRight:B --> T:storage
+    junctionRight:T --> B:db2
+    laut:L --> R:db2
+```
 ## Services
 
 - `postgres`
@@ -19,64 +61,38 @@ The stack is designed to run locally with Docker Compose. It provides:
   - stores Iceberg catalog metadata
 - `minio`
   - S3-compatible object store for Iceberg table files
-  - exposes MinIO API on port `9000` and console on `9001`
+  - exposes the MinIO API on port `9000` and the console on `9001`
+- `minio-init`
+  - bootstraps the `warehouse` bucket automatically
 - `iceberg-rest`
   - Iceberg REST catalog service
   - connects to PostgreSQL at `jdbc:postgresql://postgres:5432/iceberg_catalog`
   - uses MinIO as the storage backend
 - `spark-master`
   - Spark master node that schedules work
-- `spark-worker-1` / `spark-worker-2`
+- `spark-worker-1` and `spark-worker-2`
   - Spark workers that execute tasks
 - `spark-thrift`
   - Spark Thrift Server for SQL clients
   - depends on `spark-master` and `iceberg-rest`
 
-## Architecture Diagram
+## Repository layout
 
-```mermaid
-flowchart LR
-  subgraph lakehouse-net
-    PG[PostgreSQL\n(iceberg_catalog)]
-    MINIO[MinIO\nS3 Storage]
-    ICEBERG[Iceberg REST Catalog]
-    SPARK_MASTER[Spark Master]
-    SPARK_WORKER1[Spark Worker 1]
-    SPARK_WORKER2[Spark Worker 2]
-    THRIFT[Spark Thrift Server]
-  end
-
-  MINIO -->|S3 endpoint| ICEBERG
-  PG -->|JDBC catalog URI| ICEBERG
-  ICEBERG -->|REST catalog| THRIFT
-  THRIFT -->|master URL| SPARK_MASTER
-  SPARK_MASTER -->|registers| SPARK_WORKER1
-  SPARK_MASTER -->|registers| SPARK_WORKER2
-  THRIFT -->|reads/writes| MINIO
-  THRIFT -->|reads/writes| ICEBERG
-  SPARK_MASTER -->|logs| /tmp/spark-events
-  SPARK_WORKER1 -->|logs| /tmp/spark-events
-  SPARK_WORKER2 -->|logs| /tmp/spark-events
-```
+- `docker-compose.yml` defines the local infrastructure stack
+- `cosmos/dbt_project.yml` defines the dbt project
+- `cosmos/profiles.yml` configures the Spark/Thrift connection to the local stack
+- `cosmos/models/` contains staging, intermediate, mart, and analytics dbt models
+- `cosmos/dags/teratai_dag.py` contains an example Airflow Cosmos DAG
+- `spark/` contains the Spark image build context and entrypoint scripts
 
 ## How it works
 
-1. `postgres` initializes the `iceberg_catalog` database using `POSTGRES_DB`.
-2. `minio` starts and exposes an S3-compatible object store.
-3. `iceberg-rest` starts after PostgreSQL and MinIO are healthy.
-4. `spark-master` starts and waits for worker registration.
-5. `spark-worker-1` and `spark-worker-2` connect to the Spark master.
-6. `spark-thrift` starts and connects to the Spark master and Iceberg REST catalog.
-7. Spark uses the Iceberg REST catalog for metadata and MinIO for table storage.
-
-## Important notes
-
-- `iceberg-rest` must be running for Spark to access the Iceberg catalog because Spark is configured to use the REST catalog at `http://iceberg-rest:8181`.
-- The PostgreSQL healthcheck should explicitly specify the Iceberg database:
-  - `pg_isready -U iceberg -d iceberg_catalog`
-- If `spark-thrift` mounts `./spark/spark-thrift/scripts/entrypoint.sh`, ensure the file is executable:
-  - `chmod +x spark/spark-thrift/scripts/entrypoint.sh`
-- Do not use MySQL-style SQL in PostgreSQL init scripts. For example, `CREATE DATABASE IF NOT EXISTS` is invalid in Postgres.
+1. PostgreSQL starts and initializes the `iceberg_catalog` database.
+2. MinIO starts and exposes an S3-compatible object store.
+3. The Iceberg REST catalog starts after PostgreSQL and MinIO are healthy.
+4. Spark master and workers register with the cluster.
+5. Spark Thrift starts and connects to the Spark master and the Iceberg REST catalog.
+6. The dbt project targets Spark Thrift and uses the Iceberg REST catalog together with MinIO storage.
 
 ## Local usage
 
@@ -92,11 +108,43 @@ Start detached:
 docker compose up --build -d
 ```
 
+Check running services:
+
+```bash
+docker compose ps
+```
+
 Stop the stack:
 
 ```bash
 docker compose down
 ```
+
+## Optional testing container
+
+If you want to test dbt or Cosmos from a separate container, you can attach a temporary container to the same Docker network:
+
+```bash
+docker run -d \
+  --name cosmos-test \
+  --restart unless-stopped \
+  --network lakehouse-net \
+  -v "$PWD/cosmos:/workspace" \
+  -w /workspace \
+  -p 123:8080 \
+  python:3.12 \
+  sleep infinity
+```
+
+After that, copy or mount the relevant files such as `profiles.yml` and `models/sources.yml` into the container as needed for local testing.
+
+## Important notes
+
+- `iceberg-rest` must be running before Spark can use the Iceberg catalog.
+- The dbt profile in `cosmos/profiles.yml` uses the container hostname `spark-thrift` and the REST catalog endpoint `http://iceberg-rest:8181`.
+- The Spark entrypoint scripts should be executable:
+  - `chmod +x spark/spark-thrift/scripts/entrypoint.sh`
+- Do not use MySQL-style SQL in PostgreSQL initialization scripts. For example, `CREATE DATABASE IF NOT EXISTS` is invalid in PostgreSQL.
 
 ## Ports
 
@@ -110,18 +158,3 @@ docker compose down
 - `8082` → Spark Worker 2 UI
 - `10000` → Spark Thrift Server
 - `4040` → Spark application UI
-
----
-
-awal awal macam biasa, docker compose up pastu testing dulu pakai ani
-```bash
-docker run -d \
-  --name cosmos \
-  --restart unless-stopped \
-  -v dev-storage:/workspace \
-  -p 123:8080 \
-  python:13.3 \
-  sleep infinity
-```
-
-pastu copy paste benda benda `profiles.yml` and `sources .yml`. jangan lupa jua to connect the container to the docker compose punya network 
