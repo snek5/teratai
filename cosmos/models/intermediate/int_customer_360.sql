@@ -10,7 +10,6 @@ with customers as (
         customer_id,
         first_name,
         last_name,
-        email,
         {{ mask_pii('email') }} as email_masked,
         city as customer_city,
         credit_score,
@@ -29,9 +28,7 @@ accounts as (
         avg(balance_usd) as avg_account_balance,
         max(balance_usd) as max_account_balance,
         min(balance_usd) as min_account_balance,
-        collect_list(account_type) as account_types,
-        -- Customer lifetime value calculation using macro
-        {{ calculate_clv('customer_id') }}
+        string_agg(distinct account_type, ', ') as account_types
     from {{ ref('stg_accounts') }}
     group by 1
 ),
@@ -43,7 +40,7 @@ loans as (
         sum(loan_amount) as total_loan_amount,
         avg(interest_rate) as avg_interest_rate,
         max(loan_amount) as max_loan_amount,
-        sum({{ safe_decimal('loan_amount', 15, 2) }}) as total_loan_balance
+        sum(loan_amount) as total_loan_balance
     from {{ ref('stg_loans') }}
     where loan_status != 'Completed'
     group by 1
@@ -51,28 +48,26 @@ loans as (
 
 cards as (
     select 
-        customer_id,
-        count(card_id) as total_cards,
-        count(case when card_type = 'Credit' then 1 end) as credit_cards,
-        count(case when card_type = 'Debit' then 1 end) as debit_cards,
-        count(case when is_expired = true then 1 end) as expired_cards,
-        count(case when months_until_expiry <= 3 and is_expired = false then 1 end) as cards_expiring_soon
-    from {{ ref('int_customer_card_info') }}
-    where card_id is not null
+        a.customer_id,
+        count(c.card_id) as total_cards,
+        count(case when c.card_type = 'Credit' then 1 end) as credit_cards,
+        count(case when c.card_type = 'Debit' then 1 end) as debit_cards,
+        count(case when c.is_expired = true then 1 end) as expired_cards,
+        count(case when c.months_until_expiry <= 3 and c.is_expired = false then 1 end) as cards_expiring_soon
+    from {{ ref('stg_cards') }} c
+    left join {{ ref('stg_accounts') }} a on c.account_id = a.account_id
+    where c.card_id is not null
     group by 1
 ),
 
--- Calculate customer scoring using macros
+-- Calculate customer scoring
 customer_scoring as (
     select
-        customer_id,
-        -- Credit score percentile using macro
-        {{ percentile('credit_score', 0.9) }} over () as credit_score_90th_percentile,
-        -- Rank customers by balance
-        rank() over (order by total_balance_usd desc) as balance_rank,
-        -- NTILE for customer segmentation
-        ntile(5) over (order by total_balance_usd desc) as wealth_quintile
-    from accounts
+        a.customer_id,
+        percentile_cont(0.9) within group (order by a.total_balance_usd) over () as credit_score_90th_percentile,
+        rank() over (order by a.total_balance_usd desc) as balance_rank,
+        ntile(5) over (order by a.total_balance_usd desc) as wealth_quintile
+    from accounts a
 )
 
 select
@@ -103,7 +98,7 @@ select
     coalesce(crd.cards_expiring_soon, 0) as cards_expiring_soon,
     -- Derived metrics
     coalesce(a.total_balance_usd, 0) - coalesce(l.total_loan_amount, 0) as net_worth,
-    -- Use macro for net worth ratio
+    -- Debt to asset ratio
     round(
         coalesce(a.total_balance_usd, 0) / nullif(coalesce(l.total_loan_amount, 0), 0),
         2
@@ -112,11 +107,11 @@ select
     cs.credit_score_90th_percentile,
     cs.balance_rank,
     cs.wealth_quintile,
-    -- Generate surrogate key using macro
+    -- Generate surrogate key
     {{ generate_surrogate_key(['c.customer_id', 'c.created_at']) }} as customer_sk,
-    -- Business key using macro
-    {{ business_key(['c.first_name', 'c.last_name', 'c.email']) }} as customer_business_key,
-    -- Financial health status using macro logic
+    -- Business key
+    c.first_name || '~' || c.last_name || '~' || c.email_masked as customer_business_key,
+    -- Financial health status
     case 
         when coalesce(a.total_balance_usd, 0) > coalesce(l.total_loan_amount, 0) * 1.5 then 'Excellent'
         when coalesce(a.total_balance_usd, 0) > coalesce(l.total_loan_amount, 0) then 'Good'

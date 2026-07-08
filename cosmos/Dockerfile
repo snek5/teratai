@@ -30,4 +30,4 @@ COPY ./profiles.yml ./dbt/teratai/profiles.yml
 
 COPY ./dags ./dags
 
-EXPOSE 8080
+EXPOSE 8080 8001

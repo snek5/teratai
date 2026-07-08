@@ -13,7 +13,7 @@ with customers as (
     select * from {{ ref('dim_customers') }}
 ),
 
--- Use macro for segment metrics
+-- Segment metrics using standard SQL
 segment_metrics as (
     select
         customer_segment,
@@ -22,25 +22,13 @@ segment_metrics as (
         avg(total_balance_usd) as avg_balance,
         sum(net_worth) as total_net_worth,
         avg(credit_score) as avg_credit_score,
-        -- Use macro for percentile
-        {{ percentile('total_balance_usd', 0.5) }} as median_balance,
-        {{ percentile('net_worth', 0.5) }} as median_net_worth,
+        percentile_cont(0.5) within group (order by total_balance_usd) as median_balance,
+        percentile_cont(0.5) within group (order by net_worth) as median_net_worth,
         count(case when financial_health_status = 'Excellent' then 1 end) as healthy_customers,
         count(case when financial_health_status = 'Needs Attention' then 1 end) as at_risk_customers
     from customers
+    where customer_segment is not null
     group by 1
-),
-
--- Calculate segment growth using macros
-segment_growth as (
-    select
-        customer_segment,
-        customer_count,
-        total_portfolio_value,
-        avg_balance,
-        -- Use macro for LTV calculation
-        {{ calculate_clv('customer_id') }}
-    from segment_metrics
 )
 
 select
@@ -56,7 +44,7 @@ select
     sm.at_risk_customers,
     round((sm.healthy_customers / nullif(sm.customer_count, 0)) * 100, 2) as health_percentage,
     round((sm.at_risk_customers / nullif(sm.customer_count, 0)) * 100, 2) as risk_percentage,
-    -- Use macro for customer concentration
+    -- Portfolio concentration
     round((sm.total_portfolio_value / nullif(
         sum(sm.total_portfolio_value) over (),
         0

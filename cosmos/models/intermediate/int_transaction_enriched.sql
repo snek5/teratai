@@ -26,7 +26,7 @@ with transactions as (
         is_holiday
     from {{ ref('stg_transactions') }}
     {% if is_incremental() %}
-        {{ incremental_date_filter('transaction_date') }}
+        where transaction_date > (select max(transaction_date) from {{ this }})
     {% endif %}
 ),
 
@@ -58,21 +58,35 @@ merchants as (
     from {{ ref('stg_merchants') }}
 ),
 
--- Use macro for transaction analytics
+-- Calculate percentile values separately for compatibility
+percentile_values as (
+    select
+        percentile_cont(0.95) within group (order by amount_usd) as transaction_95th_percentile,
+        percentile_cont(0.99) within group (order by amount_usd) as transaction_99th_percentile,
+        percentile_cont(0.75) within group (order by amount_usd) as transaction_75th_percentile
+    from transactions
+),
+
+-- Transaction analytics with rolling windows
 transaction_analytics as (
     select
         t.transaction_id,
         t.account_id,
-        t.merchant_id,
+        t.customer_id,
         t.amount_usd,
         t.transaction_date,
-        -- Use rolling window macro for customer-level patterns
-        {{ rolling_window('t.amount_usd', 'a.customer_id', 't.transaction_date', 7) }} as rolling_7day_avg,
-        {{ rolling_window('t.amount_usd', 'a.customer_id', 't.transaction_date', 30) }} as rolling_30day_avg,
-        -- Use macro for percentiles
-        {{ percentile('t.amount_usd', 0.95) }} over () as transaction_95th_percentile,
-        {{ percentile('t.amount_usd', 0.99) }} over () as transaction_99th_percentile,
-        -- Calculate z-score for anomaly detection
+        -- Rolling averages
+        avg(t.amount_usd) over (
+            partition by a.customer_id 
+            order by t.transaction_date 
+            rows between 7 preceding and current row
+        ) as rolling_7day_avg,
+        avg(t.amount_usd) over (
+            partition by a.customer_id 
+            order by t.transaction_date 
+            rows between 30 preceding and current row
+        ) as rolling_30day_avg,
+        -- Z-score calculation
         (t.amount_usd - avg(t.amount_usd) over (partition by a.customer_id)) / 
         nullif(stddev(t.amount_usd) over (partition by a.customer_id), 0) as transaction_z_score
     from transactions t
@@ -104,26 +118,27 @@ select
     t.time_of_day,
     t.day_type,
     t.is_holiday,
-    -- Rolling averages from macro
+    -- Rolling averages
     ta.rolling_7day_avg,
     ta.rolling_30day_avg,
-    -- Percentiles from macro
-    ta.transaction_95th_percentile,
-    ta.transaction_99th_percentile,
-    -- Anomaly detection
+    -- Percentile values from cross join
+    p.transaction_95th_percentile,
+    p.transaction_99th_percentile,
+    p.transaction_75th_percentile,
+    -- Risk flags
     ta.transaction_z_score,
     case 
         when abs(ta.transaction_z_score) > 3 then 'Anomaly'
         when abs(ta.transaction_z_score) > 2 then 'Suspicious'
         else 'Normal'
     end as transaction_risk_flag,
-    -- Cumulative spend using macro logic
+    -- Cumulative spend
     sum(t.amount_usd) over (
         partition by a.customer_id 
         order by t.transaction_date 
         rows unbounded preceding
     ) as cumulative_spend,
-    -- Transaction frequency (hours since last transaction)
+    -- Hours since last transaction
     datediff(
         'hour',
         lag(t.transaction_date) over (
@@ -132,10 +147,10 @@ select
         ),
         t.transaction_date
     ) as hours_since_last_transaction,
-    -- Flag for high-value transaction (using macro with percentile)
+    -- Value category
     case 
-        when t.amount_usd > ta.transaction_95th_percentile then 'High Value'
-        when t.amount_usd > ta.transaction_75th_percentile then 'Above Average'
+        when t.amount_usd > p.transaction_95th_percentile then 'High Value'
+        when t.amount_usd > p.transaction_75th_percentile then 'Above Average'
         else 'Normal'
     end as value_category
 from transactions t
@@ -143,3 +158,4 @@ left join accounts a on t.account_id = a.account_id
 left join customers c on a.customer_id = c.customer_id
 left join merchants m on t.merchant_id = m.merchant_id
 left join transaction_analytics ta on t.transaction_id = ta.transaction_id
+cross join percentile_values p

@@ -20,17 +20,19 @@ with enriched_transactions as (
     {% endif %}
 ),
 
--- Use macro for transaction aggregates
+-- Transaction aggregates using standard functions
 transaction_aggregates as (
     select
         customer_id,
         count(transaction_id) as total_transactions,
         sum(amount_usd) as total_spend,
         avg(amount_usd) as avg_spend,
-        {{ percentile('amount_usd', 0.5) }} as median_transaction_amount,
-        {{ percentile('amount_usd', 0.75) }} as p75_transaction_amount,
-        {{ percentile('amount_usd', 0.9) }} as p90_transaction_amount,
-        count(case when amount_usd > 10000 then 1 end) as high_value_transactions
+        percentile_cont(0.5) within group (order by amount_usd) as median_transaction_amount,
+        percentile_cont(0.75) within group (order by amount_usd) as p75_transaction_amount,
+        percentile_cont(0.9) within group (order by amount_usd) as p90_transaction_amount,
+        count(case when amount_usd > 10000 then 1 end) as high_value_transactions,
+        min(transaction_date) as first_transaction_date,
+        max(transaction_date) as last_transaction_date
     from enriched_transactions
     group by 1
 )
@@ -60,17 +62,17 @@ select
     et.time_of_day,
     et.day_type,
     et.is_holiday,
-    -- Rolling metrics from macro
+    -- Rolling metrics
     et.rolling_7day_avg,
     et.rolling_30day_avg,
-    -- Percentiles from macro
+    -- Percentiles
     et.transaction_95th_percentile,
     et.transaction_99th_percentile,
     -- Risk metrics
     et.transaction_z_score,
     et.transaction_risk_flag,
     et.value_category,
-    -- Customer-level aggregates using macro
+    -- Customer-level aggregates
     ta.total_transactions,
     ta.total_spend,
     ta.avg_spend,
@@ -78,22 +80,22 @@ select
     ta.p75_transaction_amount,
     ta.p90_transaction_amount,
     ta.high_value_transactions,
-    -- Transaction velocity (using macro)
+    -- Transaction velocity
     round(
         ta.total_transactions / nullif(
-            {{ date_diff('min(transaction_date)', 'max(transaction_date)', 'month') }},
+            datediff('month', ta.first_transaction_date, ta.last_transaction_date),
             0
         ),
         2
     ) as transactions_per_month,
-    -- Use macro for cumulative metrics
+    -- Cumulative customer spend
     sum(et.amount_usd) over (
         partition by et.customer_id 
         order by et.transaction_date 
         rows unbounded preceding
     ) as cumulative_customer_spend,
-    -- Use macro for business date key
-    {{ business_key(['et.transaction_year', 'et.transaction_month', 'et.customer_id']) }} as period_customer_key,
+    -- Business date key
+    et.transaction_year || '~' || et.transaction_month || '~' || et.customer_id as period_customer_key,
     -- Hash for deduplication
     {{ hash_column('et.transaction_id || et.amount_usd::text || et.transaction_date::text') }} as transaction_hash,
     -- Metadata
