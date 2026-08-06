@@ -27,6 +27,9 @@ ENV/
 .coverage
 htmlcov/
 *.egg-info/
+**/logs/
+**/log/
+*.db*
 
 # Node / frontend
 node_modules/
@@ -35,6 +38,7 @@ build/
 coverage/
 
 # Logs and temp files
+*.logs
 *.log
 *.tmp
 *.temp

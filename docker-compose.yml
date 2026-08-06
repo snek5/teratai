@@ -111,11 +111,8 @@ services:
       start_period: 30s
 
   # -----------------------------
-  # Cosmos / dbt / Airflow container
+  # Cosmos / dbt / Airflow container (Development mode)
   # -----------------------------
-# -----------------------------
-# Cosmos / dbt / Airflow container (Development Mode)
-# -----------------------------
   cosmos:
     build:
       context: ./cosmos
