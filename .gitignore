@@ -1,0 +1,61 @@
+# Generic ignore rules for files and folders anywhere in the repository
+# Patterns without a leading slash apply recursively in subdirectories as well.
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+coverage/
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+*.pid
+*.bak
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Databases and local data
+*.sqlite3
+*.db
+*.dump
+cache/
+tmp/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Generated outputs
+generated/
+out/
