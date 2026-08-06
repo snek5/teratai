@@ -31,5 +31,3 @@ lakehouse:
         spark.executor.memory: "2g"
         spark.executor.cores: "2"
         spark.driver.memory: "2g"
-
-pakai duckb

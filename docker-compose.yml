@@ -103,6 +103,60 @@ services:
         condition: service_healthy
     networks:
       - lakehouse-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8181 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # -----------------------------
+  # Cosmos / dbt / Airflow container
+  # -----------------------------
+# -----------------------------
+# Cosmos / dbt / Airflow container (Development Mode)
+# -----------------------------
+  cosmos:
+    build:
+      context: ./cosmos
+      dockerfile: Dockerfile
+    container_name: lakehouse-cosmos
+    environment:
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////app/airflow.db
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
+      - AIRFLOW__CORE__FERNET_KEY=${FERNET_KEY:-46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=}
+      - PYTHONPATH=/app
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      - AWS_REGION=us-east-1
+      - DBT_PROFILES_DIR=/app/dbt/teratai
+      - DBT_PROJECT_DIR=/app/dbt/teratai
+      - SPARK_THRIFT_HOST=spark-thrift
+      - SPARK_THRIFT_PORT=10000
+    ports:
+      - "8083:8080"  # Airflow webserver (you'll start manually)
+      - "8001:8001"  # Optional additional port
+    volumes:
+      - ./cosmos:/app
+      - ./cosmos/dags:/app/dags
+      - ./cosmos/logs:/app/logs
+      - ./cosmos/plugins:/app/plugins
+      - /var/run/docker.sock:/var/run/docker.sock  # Optional for DockerOperator
+    networks:
+      - lakehouse-net
+    depends_on:
+      spark-thrift:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    # Removed healthcheck since we're not running services automatically
+    stdin_open: true
+    tty: true
 
   # -----------------------------
   # Spark Master
@@ -182,4 +236,10 @@ services:
       - spark-events:/tmp/spark-events
     networks:
       - lakehouse-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4040 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     command: ["/entrypoint.sh", "thrift"]
