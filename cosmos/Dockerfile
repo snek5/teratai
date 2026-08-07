@@ -36,10 +36,10 @@ RUN apt-get update && apt-get install -y \
  && rm -rf /var/lib/apt/lists/*
 
 # Upgrade pip and install dependencies
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel apache-airflow-providers-apache-spark
 
 # Install all dependencies with regular pip
-RUN pip install --no-cache-dir astronomer-cosmos dbt-spark[PyHive] pyiceberg
+RUN pip install --no-cache-dir astronomer-cosmos dbt-spark[PyHive] pyiceberg pyspark pandas sqlalchemy
 
 # Create necessary directories
 RUN mkdir -p /app/dags /app/dbt/teratai /app/logs /app/plugins
