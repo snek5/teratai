@@ -1,14 +1,12 @@
-# cosmos/dags/init_iceberg_tables_dynamic.py
+# cosmos/dags/init_iceberg_dag.py
 """
-Dynamic DAG that creates a SparkSubmit task for EACH table in sources.yml.
-This gives you per-table visibility and retry capability.
+Dynamic DAG that creates Iceberg tables using Spark Thrift Server
 """
 
 from datetime import datetime, timedelta
 from airflow import DAG
-from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
-from airflow.operators.dummy import DummyOperator
-from airflow.operators.python import PythonOperator
+from airflow.providers.apache.spark.operators.spark_sql import SparkSqlOperator
+from airflow.operators.empty import EmptyOperator
 import yaml
 import os
 
@@ -22,74 +20,121 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
 }
 
-SPARK_CONN_ID = 'spark_default'
+# Connection ID for Spark Thrift Server
+SPARK_THRIFT_CONN_ID = 'spark_thrift_default'
 SOURCES_YML = '/app/dbt/teratai/models/sources/sources.yml'
-SCRIPT_PATH = '/app/scripts/init_iceberg_from_dbt_sources.py'
-
-SPARK_CONF = {
-    'packages': 'org.apache.iceberg:iceberg-spark-runtime-3.4_2.12:1.5.2,org.apache.hadoop:hadoop-aws:3.3.4',
-    'conf': {
-        'spark.sql.adaptive.enabled': 'true',
-        'spark.dynamicAllocation.enabled': 'true',
-        'spark.dynamicAllocation.minExecutors': '1',
-        'spark.dynamicAllocation.maxExecutors': '4'
-    }
-}
 
 def parse_sources():
-    """Parse sources.yml and return table names"""
-    with open(SOURCES_YML, 'r') as f:
-        config = yaml.safe_load(f)
-    
-    tables = []
-    for source in config.get('sources', []):
-        for table in source.get('tables', []):
-            tables.append(table['name'])
-    return tables
+    """Parse sources.yml and return table names with their configs"""
+    try:
+        with open(SOURCES_YML, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        tables = []
+        for source in config.get('sources', []):
+            # Get source name and path info
+            source_name = source.get('name', 'unknown')
+            source_path = source.get('path', '')
+            
+            for table in source.get('tables', []):
+                tables.append({
+                    'name': table['name'],
+                    'source_name': source_name,
+                    'source_path': source_path,
+                    'partition_cols': table.get('partition_by', ['year', 'month', 'day']),
+                    # Get any other metadata from sources.yml
+                    'format': table.get('format', 'csv'),
+                    'delimiter': table.get('delimiter', ','),
+                    'header': table.get('header', True),
+                })
+        return tables
+    except FileNotFoundError:
+        print(f"⚠️ sources.yml not found at {SOURCES_YML}")
+        return []
+    except Exception as e:
+        print(f"⚠️ Error parsing sources.yml: {e}")
+        return []
 
-# Get table names
+# Get table configurations
 TABLES = parse_sources()
+print(f"📋 Found tables: {[t['name'] for t in TABLES]}")
 
+# Create DAG
 dag = DAG(
-    'init_iceberg_tables_dynamic',
+    'init_iceberg_tables_thrift',
     default_args=default_args,
-    description='Dynamically initialize Iceberg tables from dbt sources',
-    schedule_interval=None,
+    description='Initialize Iceberg tables via Spark Thrift Server',
+    schedule=None,
     catchup=False,
-    tags=['iceberg', 'dbt', 'dynamic'],
+    tags=['iceberg', 'spark', 'thrift', 'airflow3'],
 )
 
-start = DummyOperator(task_id='start', dag=dag)
+# Start and End operators
+start = EmptyOperator(task_id='start', dag=dag)
+end = EmptyOperator(task_id='end', dag=dag)
 
-# Dynamically create tasks for each table
+# Create tasks for each table
 init_tasks = []
-for table_name in TABLES:
-    task_id = f"init_{table_name}"
-    
-    init_task = SparkSubmitOperator(
-        task_id=task_id,
-        application=SCRIPT_PATH,
-        conn_id=SPARK_CONN_ID,
-        application_args=[
-            '--sources-yml', SOURCES_YML,
-            '--catalog-name', 'iceberg',
-            '--target-db', 'staging',
-            '--table-filter', table_name,
-            '--partition-by', 'year', 'month', 'day'
-        ],
-        **SPARK_CONF,
-        dag=dag,
-    )
-    init_tasks.append(init_task)
+if TABLES:
+    for table_config in TABLES:
+        table_name = table_config['name']
+        task_id = f"init_{table_name}"
+        partition_cols = table_config['partition_cols']
+        
+        # Build the CREATE TABLE SQL
+        # Note: Adjust the CSV path based on your data location
+        csv_path = f"/data/sources/{table_name}"  # Adjust this path!
+        
+        # SQL to create Iceberg table from CSV
+        create_table_sql = f"""
+        -- Create Iceberg table if not exists
+        CREATE TABLE IF NOT EXISTS iceberg.staging.stg_{table_name}
+        USING iceberg
+        PARTITIONED BY ({', '.join(partition_cols)})
+        AS 
+        SELECT * FROM csv.`{csv_path}`
+        """
+        
+        # Alternative: Create table without data, then insert
+        create_empty_sql = f"""
+        -- Create empty Iceberg table
+        CREATE TABLE IF NOT EXISTS iceberg.staging.stg_{table_name} (
+            -- Add your column definitions here
+            -- This is optional - Spark can infer schema from CSV
+        )
+        USING iceberg
+        PARTITIONED BY ({', '.join(partition_cols)})
+        """
+        
+        # Insert data into existing table
+        insert_sql = f"""
+        -- Insert data into existing table (overwrite or append)
+        INSERT OVERWRITE iceberg.staging.stg_{table_name}
+        SELECT * FROM csv.`{csv_path}`
+        """
+        
+        # For simplicity, we'll use a single SQL that creates and populates
+        init_task = SparkSqlOperator(
+            task_id=task_id,
+            conn_id=SPARK_THRIFT_CONN_ID,
+            sql=create_table_sql,
+            dag=dag,
+        )
+        
+        # Add documentation
+        init_task.doc_md = f"""
+        ### Initialize Table: {table_name}
+        
+        - **Source:** CSV from `{csv_path}`
+        - **Target:** `iceberg.staging.stg_{table_name}`
+        - **Partitions:** {', '.join(partition_cols)}
+        - **Method:** CREATE TABLE ... AS SELECT
+        """
+        
+        init_tasks.append(init_task)
 
-# Run dbt after all tables are initialized
-run_dbt = BashOperator(
-    task_id='run_dbt',
-    bash_command=f"cd /app/dbt/teratai && dbt run",
-    dag=dag,
-)
-
-end = DummyOperator(task_id='end', dag=dag)
-
-# Dependencies
-start >> init_tasks >> run_dbt >> end
+# Define dependencies
+if init_tasks:
+    start >> init_tasks >> end
+else:
+    start >> end
